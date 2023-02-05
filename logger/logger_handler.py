@@ -45,7 +45,7 @@ class Logger:
         self.rank_path = logs_directory + "ranks.txt"
 
     def add_line(self, msg):
-        self.lg.info(msg)
+        self.lg.info(str(msg).encode("utf8"))
 
     def flush_buffer(self):
         self.add_line('    ' + '-' * 50)

@@ -31,7 +31,7 @@ class Message:
 
     @staticmethod
     def parse_message(raw_string:str):
-        raw_string=Message.strip_both(raw_string,"<","/>")
+        raw_string=Message.strip_both(Message.strip_both(raw_string,"<",">"),"<","/")
         sep=" "
         sep2="="
         messages=raw_string.split(sep)
@@ -44,7 +44,8 @@ class Message:
                 continue
 
             s=x.split(sep2)
-            assert len(s)==2
+            if len(s)!=2:
+                return Message("")
 
             key,value=s
             value=Message.strip_both(value,"\"","\"")
@@ -67,21 +68,58 @@ class Message:
 
 class Player:
     def __init__(self,name,tid:str,sx:str,authenticated=False):
+        self.dan=0
         self.disconnected=False
         self.authenticated=authenticated
         self.is_tournament=None
         self.is_anonymous=None
         self.is_regular=None
+        self.game_accepted=False
+        self.is_ready_to_play=False
         self.name=name
         self.tid=tid
         self.sx=sx
 
-    def is_ready(self):
+    def is_initialized(self):
         return self.authenticated and all((
             self.is_tournament is not None,
             self.is_regular is not None,
             self.is_anonymous is not None
         ))
+
+    def is_ready(self):
+        return self.is_initialized() and self.game_accepted and self.is_ready_to_play
+
+class GameInfo:
+    def __init__(self,round_number,honba_sticks,
+            reach_sticks,bonus_tile_indicator,
+            dealer,scores):
+        self.round_number,self.honba_sticks,self.reach_sticks,self.bonus_tile_indicator,self.dealer,self.scores=\
+            round_number,honba_sticks,\
+            reach_sticks,bonus_tile_indicator,\
+            dealer,scores
+
+    @staticmethod
+    def random():
+        oya=0
+        ten=[
+            "25000",
+            "25000",
+            "25000",
+            "25000",
+        ]
+        round_number="0"
+        honba_sticks="0"
+        reach_sticks="0"
+        bonus_tiles=[
+            "1","2","3" # max length: 5
+        ]
+        round_info=[round_number,honba_sticks,reach_sticks]+["1","2"]+bonus_tiles
+        return GameInfo(round_number=round_number,
+            honba_sticks=honba_sticks,reach_sticks=reach_sticks,
+            bonus_tile_indicator=bonus_tiles,dealer=oya,
+            scores=ten)
+
 
 
 class TenhouServerSocket:
@@ -95,6 +133,12 @@ class TenhouServerSocket:
         self.skt = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 
         self.player=None
+
+        self.opponents=[
+            Player(name="Player1",tid="1",sx="M",authenticated=True),
+            Player(name="Player1",tid="2",sx="M",authenticated=True),
+            Player(name="Player1",tid="3",sx="M",authenticated=True)
+        ]
 
     def start(self):
         self.skt.bind((self.url,self.port))
@@ -133,6 +177,7 @@ class TenhouServerSocket:
         t=TenhouServerSocket
         msgs=messages_str.split(t.message_sep)
         msgs=[x for x in msgs if x]
+
         return [Message(x) for x in msgs]
 
     def stop(self):
@@ -176,9 +221,26 @@ class TenhouServerSocket:
             self.player.is_regular=is_regular
             return []
         elif t=="join":
-            print(message)
+            print("join game")
             game_type=message['t']
             return self.join_game(game_type)
+        elif t=='gok':
+            print("game accepted")
+            self.player.game_accepted=True
+            return []
+        elif t=='nextready':
+            print("player ready")
+            self.player.is_ready_to_play=True
+            return self.initialize_game(GameInfo.random())
+        elif t=='n': # call a win
+            print("player called a win")
+            return []
+        elif t=='reach':
+            print("player called riichi")
+            return []
+        elif t=='d': # discard a tile
+            print("player discarded a tile")
+            return []
 
     def send_error(self, connection:socket.socket, message):
         m=Message.for_type_and_args("err",{
@@ -186,8 +248,49 @@ class TenhouServerSocket:
         })
         self.send_messages(connection,m)
 
-    def join_game(self, game_type):
-        pass
+    def initialize_game(self,game_info:GameInfo, initial_hand: Hand)->Message:
+        """
+        round_info = [int(s) for s in TenhouParser.get_attribute_value(msg, 'seed').split(',')]
+        scores = [int(score) for score in TenhouParser.get_attribute_value(msg, 'ten').split(',')]
+        dealer = int(TenhouParser.get_attribute_value(msg, 'oya'))
+        return {
+            'round_number': round_info[0],
+            'honba_sticks': round_info[1],
+            'reach_sticks': round_info[2],
+            'bonus_tile_indicator': round_info[5:],
+            'dealer': dealer,
+            'scores': scores
+        }
+        """
+        return Message.for_type_and_args("init",{
+            "seed":[game_info.round_number,game_info.honba_sticks,game_info.reach_sticks,"a","b",
+                    ]+game_info.bonus_tile_indicator,
+            "ten":game_info.scores,
+            "dealer":game_info.dealer
+        })
+
+
+    def join_game(self, game_type) -> Message|list[Message]:
+        join_msg=Message.for_type_and_args("GO",{
+            "type":game_type[0],
+        })
+        game_msg=Message.for_type_and_args("TAIKYOKU",{
+            'oya':"0", # 0 - east 4 - north
+            'log':"a"
+        })
+        op_info=self.opponents_info_message(self.opponents)
+        return [join_msg,game_msg,op_info]
+
+    def opponents_info_message(self, opponents:list[Player]) -> Message:
+        sep=","
+        players=[self.player]+opponents
+        return Message.for_type_and_args("UN",{
+            "dan":sep.join(map(lambda x:str(x.dan),players)),
+            "n0":players[0].name,
+            "n1":players[1].name,
+            "n2":players[2].name,
+            "n3":players[3].name,
+        })
 
     def send_messages(self, conn:socket.socket, messages:Message | list[Message]):
         if isinstance(messages,Message):
@@ -202,8 +305,8 @@ class TenhouServerSocket:
             self.send_error(conn,"already authenticated")
         message=Message.for_type_and_args("hello",{
             "auth":"123abc",
-            "PF4":"100", #rating
-            "nintei":"101" #new level
+            "PF4":"1", #rating
+            "nintei":"1" #new level
         })
         self.player=Player(name=name,tid=tid,sx=sx)
         return message
