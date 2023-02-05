@@ -2,7 +2,7 @@
 import os
 from tkinter import *
 from PIL import ImageTk, Image, ImageFont, ImageDraw
-from main import run_jianyang_ai
+from main import run_jianyang_ai,run_example_ai
 
 
 __author__ = "Jianyang Tang"
@@ -1041,7 +1041,7 @@ def main():
     img = ImageTk.PhotoImage(bg_image)
     canvas.create_image(0, 0, image=img, anchor="nw")
     drawer = TableDisplay(canvas)
-    run_jianyang_ai(drawer)
+    run_example_ai(drawer)
     root.mainloop()
 
 

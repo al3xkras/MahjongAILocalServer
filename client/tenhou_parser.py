@@ -18,6 +18,7 @@ class TenhouParser:
 
     @staticmethod
     def parse_auth_msg(msg):
+        print("auth msg",msg)
         rating, auth_code, new_level = '', '', ''
         if 'auth=' in msg:
             auth_code = TenhouParser.get_attribute_value(msg, 'auth')
@@ -224,7 +225,7 @@ class TenhouParser:
 
         parts = auth_code.split('-')
         if len(parts) != 2:
-            return False
+            return auth_code
         first_part, second_part = parts[0], parts[1]
         if len(first_part) != 8 or len(second_part) != 8:
             return False

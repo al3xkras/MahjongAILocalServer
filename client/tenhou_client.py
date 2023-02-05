@@ -52,6 +52,7 @@ class TenhouClient:
         # send authentication request
         self._send('<HELO name="{}" tid="f0" sx="M" />'.format(quote(self.user_id)))
         msgs = self._get()
+        self._log(msgs)
         auth_msg = None
         if len(msgs) > 0:
             auth_msg = msgs[0]
@@ -69,7 +70,9 @@ class TenhouClient:
             self.game_table.set_personal_info(names_and_levels)
             return True
         # handle authentication message
+
         auth_code, rating, new_level = TenhouParser.parse_auth_msg(auth_msg)
+
         if not auth_code:
             self._log("    Authentication code was not received!")
             return False
@@ -685,6 +688,7 @@ class TenhouClient:
         msgs = ""
         try:
             msgs = self.skt.recv(2048).decode('utf-8')
+            print(msgs)
         except ConnectionResetError as er:
             print(er)
             sleep(0.1)

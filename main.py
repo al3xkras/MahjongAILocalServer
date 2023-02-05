@@ -28,7 +28,7 @@ def connect_and_play(ai_obj, opponent_class, user, username, lobbytype, gametype
         return False
 
 
-def run_example_ai():
+def run_example_ai(drawer=None):
     # the OBJECT of your own implemented Mahjong agent
     ai_module = importlib.import_module("agents.random_ai_example")
     ai_class = getattr(ai_module, "RandomAI")
@@ -45,7 +45,7 @@ def run_example_ai():
 
     logger_obj = Logger("log1", user_name)      # two arguments: id of your test epoch, user name
 
-    connect_and_play(ai_obj, opponent_class, user, user_name, '0', game_type, logger_obj)  # play one game
+    connect_and_play(ai_obj, opponent_class, user, user_name, '0', game_type, logger_obj, drawer)  # play one game
 
 
 def run_jianyang_ai(drawer=None):
@@ -67,7 +67,7 @@ def run_jianyang_ai(drawer=None):
 
 
 def main():
-    run_jianyang_ai()
+    run_example_ai()
 
 
 if __name__ == '__main__':
