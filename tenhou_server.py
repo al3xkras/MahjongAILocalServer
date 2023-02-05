@@ -93,11 +93,12 @@ class Player:
 class GameInfo:
     def __init__(self,round_number,honba_sticks,
             reach_sticks,bonus_tile_indicator,
-            dealer,scores):
+            dealer,scores,initial_hand:"Hand"):
         self.round_number,self.honba_sticks,self.reach_sticks,self.bonus_tile_indicator,self.dealer,self.scores=\
             round_number,honba_sticks,\
             reach_sticks,bonus_tile_indicator,\
             dealer,scores
+        self.initial_hand=initial_hand
 
     @staticmethod
     def random():
@@ -118,9 +119,22 @@ class GameInfo:
         return GameInfo(round_number=round_number,
             honba_sticks=honba_sticks,reach_sticks=reach_sticks,
             bonus_tile_indicator=bonus_tiles,dealer=oya,
-            scores=ten)
+            scores=ten,initial_hand=Hand.random_hand())
 
 
+class Hand:
+    delim=","
+    def __init__(self, tiles):
+        self.tiles=tiles
+
+    @staticmethod
+    def random_hand() -> "Hand":
+        return Hand([
+            0,0,0,1,2,3,1,2,3,6,28,14,32,
+        ])
+
+    def stringify(self):
+        return self.delim.join(map(str,self.tiles))
 
 class TenhouServerSocket:
     message_sep="\x00"
@@ -248,7 +262,7 @@ class TenhouServerSocket:
         })
         self.send_messages(connection,m)
 
-    def initialize_game(self,game_info:GameInfo, initial_hand: Hand)->Message:
+    def initialize_game(self,game_info:GameInfo)->Message:
         """
         round_info = [int(s) for s in TenhouParser.get_attribute_value(msg, 'seed').split(',')]
         scores = [int(score) for score in TenhouParser.get_attribute_value(msg, 'ten').split(',')]
@@ -262,12 +276,19 @@ class TenhouServerSocket:
             'scores': scores
         }
         """
+        some_nums=[1,2]
+        seed=[game_info.round_number,game_info.honba_sticks,game_info.reach_sticks,
+            ] + some_nums + game_info.bonus_tile_indicator
         return Message.for_type_and_args("init",{
-            "seed":[game_info.round_number,game_info.honba_sticks,game_info.reach_sticks,"a","b",
-                    ]+game_info.bonus_tile_indicator,
-            "ten":game_info.scores,
-            "dealer":game_info.dealer
+            "seed":self.list_stringify(seed),
+            "ten":self.list_stringify(game_info.scores),
+            "oya":game_info.dealer,
+            "hai":game_info.initial_hand.stringify()
         })
+
+    @staticmethod
+    def list_stringify(lst:list):
+        return ",".join(map(str,lst))
 
 
     def join_game(self, game_type) -> Message|list[Message]:
