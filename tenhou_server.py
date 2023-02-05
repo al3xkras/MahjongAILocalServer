@@ -26,7 +26,7 @@ class Message:
             s+="%s=\"%s\""%(x,self.args[x])
         return "<%s %s/>"%(self.type.upper(),s)
 
-    def __getattr__(self, item):
+    def __getitem__(self, item):
         return self.args[item]
 
     @staticmethod
@@ -111,10 +111,17 @@ class TenhouServerSocket:
 
                 data=connection.recv(2048).decode("utf-8")
             messages=self.parse_messages(data)
+            to_send=[]
             for x in messages:
-                self.process_message(connection,x)
                 if x.type.lower()=="exit":
                     self.stop()
+                    break
+                msgs=self.process_message(connection,x)
+                if isinstance(msgs,Message):
+                    to_send.append(msgs)
+                else:
+                    to_send+=msgs
+            self.send_messages(connection,to_send)
         connection.close()
         print(connection)
 
@@ -132,7 +139,7 @@ class TenhouServerSocket:
         self.exit=True
         self.skt.close()
 
-    def process_message(self, conn:socket.socket, message:Message):
+    def process_message(self, conn:socket.socket, message:Message) -> Message | list[Message]:
         t=message.type.lower()
         print(message)
         if t=="helo":
@@ -140,23 +147,25 @@ class TenhouServerSocket:
             name=message.args['name']
             tid=message.args['tid']
             sx=message.args['sx']
-            self.initialize_player(conn,name,tid,sx)
+            return self.initialize_player(conn,name,tid,sx)
 
         elif t=='z': # keep alive
-            pass
+            return []
 
         elif t=='auth':
+            print("authenticate")
             if self.player is None:
                 self.send_error(conn,"not authenticated")
             token=message['val']
-            auth_msg=self.create_auth_message(token)
+            return self.create_auth_message(token)
 
         elif t=='pxr':
+            print("init game type")
             if self.player is None or not isinstance(self.player,Player):
                 if not isinstance(self.player,Player):
                     self.player=None
                 self.send_error(conn,"not authenticated")
-                return
+                return []
             v=message['V']
             is_tournament=v=='-1'
             is_anonymous=v=='1'
@@ -165,8 +174,11 @@ class TenhouServerSocket:
             self.player.is_tournament=is_tournament
             self.player.is_anonymous=is_anonymous
             self.player.is_regular=is_regular
-
-
+            return []
+        elif t=="join":
+            print(message)
+            game_type=message['t']
+            return self.join_game(game_type)
 
     def send_error(self, connection:socket.socket, message):
         m=Message.for_type_and_args("err",{
@@ -174,6 +186,8 @@ class TenhouServerSocket:
         })
         self.send_messages(connection,m)
 
+    def join_game(self, game_type):
+        pass
 
     def send_messages(self, conn:socket.socket, messages:Message | list[Message]):
         if isinstance(messages,Message):
@@ -183,16 +197,16 @@ class TenhouServerSocket:
         ).encode())
 
     def initialize_player(self,conn:socket.socket,
-                          name,tid,sx):
+                          name,tid,sx) -> Message:
         if self.player is not None:
             self.send_error(conn,"already authenticated")
         message=Message.for_type_and_args("hello",{
-            "AUTH":"123abc",
+            "auth":"123abc",
             "PF4":"100", #rating
             "nintei":"101" #new level
         })
         self.player=Player(name=name,tid=tid,sx=sx)
-        self.send_messages(conn, message)
+        return message
 
     def create_auth_message(self, token:str):
         message = Message.for_type_and_args("LN", {
