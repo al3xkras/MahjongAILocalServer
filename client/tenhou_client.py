@@ -14,13 +14,17 @@ from client.mahjong_tile import Tile
 __author__ = "Jianyang Tang"
 __email__ = "jian4yang2.tang1@gmail.com"
 
-TENHOU_HOST = '133.242.10.78'
-TENHOU_PORT = 10080
+HOST = 'localhost'
+PORT = 10001
 IS_TOURNAMENT = False
 JOINING_GAME_TIMEOUT = 2
 MSG_LOGGER = False
 BUFFER_MODE = True
 
+
+"""
+mapping:
+"""
 
 class TenhouClient:
 
@@ -42,7 +46,7 @@ class TenhouClient:
 
     def connect(self):
         self.skt = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self.skt.connect((TENHOU_HOST, TENHOU_PORT))
+        self.skt.connect((HOST, PORT))
 
     def authenticate(self):
         # send authentication request
