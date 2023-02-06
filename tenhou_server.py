@@ -12,13 +12,14 @@ Content-Type: text/html
 """
 
 import random
+from collections import deque
 
 class MahjongGame:
     def __init__(self, game_info:"GameInfo", random_seed=None):
         print("mahjong game: init")
         self.seed=random_seed
-        self.tiles=list(range(70))
-        self.seats=list(range(4))
+        self.tiles=list(range(136))
+        self.seats=deque(range(4))
         self.game_info=game_info
         self.last_tile_taken=None
         if self.seed is not None:
@@ -26,7 +27,7 @@ class MahjongGame:
         else:
             random.seed()
         random.shuffle(self.tiles)
-        random.shuffle(self.seats)
+        self.seats.rotate(random.randint(0,3))
         print(self)
 
     def __str__(self):
@@ -48,7 +49,7 @@ class MahjongGame:
     def get_next_player_seat(self):
         print("seats left: ",self.seats)
         assert len(self.seats)>0
-        return self.seats.pop(0)
+        return self.seats.pop()
 
     def restart(self,game_info,random_seed):
         self.__init__(game_info,random_seed)
@@ -69,6 +70,10 @@ class MahjongGame:
 
     def is_game_over(self):
         return self.is_round_over() and self.game_info.is_last_round()
+
+    @staticmethod
+    def get_tile_type_by_number(tile:int):
+        return tile//4
 
 class Message:
     def __init__(self, raw_string:str):
@@ -166,6 +171,31 @@ class Player:
         if self.hand is None:
             raise Exception("player hand is not initialized")
         return self.hand
+
+    def can_call_kan(self, tile:int):
+        return self.hand.get_tiles().count(tile)>=3
+
+    def can_call_chii(self, seat:int, tile:int):
+        if (seat + 1) % 4 != self.seat:
+            return False
+        f = MahjongGame.get_tile_type_by_number
+        tile=f(tile)
+        if tile>26:
+            return False
+        mapped=list(map(f,self.hand.get_tiles()))
+        t0,t1,t2,t3=[False]*4
+        if tile>=2:
+            t0=mapped.count(tile - 2) >= 1
+        if tile >= 1:
+            t1 = mapped.count(tile - 1) >= 1
+        if tile <= 26:
+            t2 = mapped.count(tile + 1) >= 1
+        if tile <= 25:
+            t3 = mapped.count(tile + 2) >= 1
+        return t0 and t1 or t1 and t2 or t2 and t3
+
+    def can_call_pon(self,tile:int):
+        return self.hand.get_tiles().count(tile)>=2
 
     def next_round(self,hand:"Hand",seat:int):
         self.hand=hand
@@ -324,7 +354,7 @@ class TenhouServerSocket:
 
     def process_message(self, conn:socket.socket, message:Message) -> Message | list[Message]:
         t=message.type.lower()
-        print(message)
+        #print(message)
         messages = []
 
         if self.is_game_over():
@@ -367,14 +397,17 @@ class TenhouServerSocket:
             self.player.is_anonymous=is_anonymous
             self.player.is_regular=is_regular
             messages+=[]
+
         elif t=="join":
             print("join game")
             game_type=message['t']
             messages+=self.join_game(game_type)
+
         elif t=='gok':
             print("game accepted")
             self.player.game_accepted=True
             messages+=[]
+
         elif t=='nextready':
             print("player ready")
             self.next_round()
@@ -407,6 +440,18 @@ class TenhouServerSocket:
             print("player discarded a tile (north)")
         elif t=='n':
             print("player called chi/pon/kan/riichi/ron/tsumo")
+            meld_type=int(message.args.get('type',-1))
+            #types:
+            # 3 - call chii
+            # 1 - call pon
+            # 2 - call an open kan
+            # 5 - call chankan
+            # 4 - call kan
+            tile_called=int(message.args.get('hai',-1))
+            if meld_type==5 or meld_type==2 or meld_type==4:
+                print("player called a kan")
+                #draw next tile after calling a kan
+                messages.append(self.tile_drawn_message(self.game.get_next_tile()))
 
         return messages
 
@@ -471,7 +516,17 @@ class TenhouServerSocket:
 
     def tile_message(self, seat:int, tile:int) -> Message:
         seat_str=self.tile_msg_type_by_seat[seat]
-        return Message.for_type_and_args("%s%d"%(seat_str,tile))
+        args=dict()
+        if self.player.can_call_kan(tile):
+            args['t']="3"
+        elif self.player.can_call_pon(tile) or self.player.can_call_chii(seat,tile):
+            args['t']=""
+
+        return Message.for_type_and_args("%s%d"%(seat_str,tile),args)
+
+    def tile_message_type_by_seat(self,seat:int):
+        lst=['d','e','f','g']
+        return lst[(seat-self.player.seat)%4]
 
     def tile_drawn_message(self, tile:int) -> Message:
         return Message("T%d"%tile)
