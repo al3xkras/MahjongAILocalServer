@@ -1,5 +1,6 @@
 import random
 import socket
+import time
 
 server_address = ('localhost', 10001)
 http_response = b"""HTTP/1.1 200 OK
@@ -14,25 +15,30 @@ import random
 
 class MahjongGame:
     def __init__(self, game_info:"GameInfo", random_seed=None):
+        print("mahjong game: init")
         self.seed=random_seed
-        self.tiles=list(range(136))
+        self.tiles=list(range(70))
         self.seats=list(range(4))
         self.game_info=game_info
         self.last_tile_taken=None
-        self.is_finished=False
         if self.seed is not None:
             random.seed(self.seed)
         else:
             random.seed()
         random.shuffle(self.tiles)
         random.shuffle(self.seats)
+        print(self)
 
-    def get_next_deck(self):
+    def __str__(self):
+        return "MahjongGame{" \
+               "%s\n  ,%s\n  ,%s\n  ," \
+               "}"%(self.game_info,self.tiles,self.seats)
+
+    def get_next_hand(self):
         return Hand([self.get_next_tile() for _ in range(13)])
 
     def get_next_tile(self):
         tile=self.tiles.pop(0)
-        self.is_finished=len(self.tiles)==0
         self.last_tile_taken=tile
         return tile
 
@@ -40,8 +46,12 @@ class MahjongGame:
         return self.last_tile_taken
 
     def get_next_player_seat(self):
+        print("seats left: ",self.seats)
         assert len(self.seats)>0
         return self.seats.pop(0)
+
+    def restart(self,game_info,random_seed):
+        self.__init__(game_info,random_seed)
 
     def next_round(self):
         self.game_info.next_round(
@@ -51,14 +61,14 @@ class MahjongGame:
         )
         self.__init__(self.game_info,self.seed)
 
-    def finish_game(self):
-        self.is_finished=True
+    def end_round(self):
+        self.tiles=[]
 
     def is_round_over(self):
-        return self.is_finished
+        return len(self.tiles)==0
 
     def is_game_over(self):
-        return self.is_finished and self.game_info.is_last_round()
+        return self.is_round_over() and self.game_info.is_last_round()
 
 class Message:
     def __init__(self, raw_string:str):
@@ -170,8 +180,15 @@ class GameInfo:
         self.reach_sticks=reach_sticks
         self.bonus_tiles=bonus_tiles
         self.dealer_seat=dealer_seat
+        self.active_player=dealer_seat
         self.scores=scores
         self.max_rounds=8
+
+    def __str__(self) -> str:
+        return "GameInfo{" \
+               "%s\n    ,%s\n    ,%s\n    ,%s\n    ,%s\n    ,%s\n    ,%s\n    " \
+               "}"%(self.round_number,self.honba_sticks,self.reach_sticks,self.bonus_tiles,
+                    self.dealer_seat,self.scores,self.max_rounds)
 
     @staticmethod
     def initial():
@@ -209,8 +226,14 @@ class GameInfo:
         self.dealer_seat=dealer_seat
         self.set_bonus_tiles(bonus_tiles)
 
+    def get_active_player_seat(self):
+        return self.active_player
+
+    def next_player(self):
+        self.active_player=(self.active_player+1)%4
+
     def is_last_round(self):
-        return self.round_number==self.max_rounds
+        return self.round_number>=self.max_rounds
 
     def set_bonus_tiles(self,bonus_tiles:list[int]):
         self.bonus_tiles=bonus_tiles
@@ -245,9 +268,12 @@ class TenhouServerSocket:
         self.game=MahjongGame(self.game_info)
 
         self.opponents=[
-            Player(seat=1,name="Player1",tid="1",sx="M",authenticated=True,initial_hand=self.game.get_next_deck()),
-            Player(seat=2,name="Player1",tid="2",sx="M",authenticated=True,initial_hand=self.game.get_next_deck()),
-            Player(seat=3,name="Player1",tid="3",sx="M",authenticated=True,initial_hand=self.game.get_next_deck())
+            Player(seat=1, name="Player1",
+                   tid="1", sx="M", authenticated=True),
+            Player(seat=2, name="Player2",
+                   tid="2", sx="M", authenticated=True),
+            Player(seat=3, name="Player3",
+                   tid="3", sx="M", authenticated=True)
         ]
 
         self.last_discarded_tile=None
@@ -302,15 +328,14 @@ class TenhouServerSocket:
         messages = []
 
         if self.is_game_over():
-            print("game over")
+            print("GAME OVER")
             messages.append(self.game_over_message())
+            return messages
         elif self.is_round_over():
-            print("round over")
-            self.game.next_round()
-            for i in range(4):
-                player=self.get_player_by_seat(i)
-                player.next_round(seat=self.game.get_next_player_seat(),hand=self.game.get_next_deck())
+            print("ROUND OVER")
+            self.next_round()
             messages.append(self.round_over_message())
+            return messages
         if t=="helo":
             print("init player")
             name=message.args['name']
@@ -352,27 +377,28 @@ class TenhouServerSocket:
             messages+=[]
         elif t=='nextready':
             print("player ready")
-            self.player.is_ready_to_play=True
-            self.player.hand=self.game.get_next_deck()
-            m1=self.initialize_game(self.game_info)
-            if self.player.seat==0:
-                messages+=[m1, self.tile_drawn_message(self.game.get_next_tile())]
-            else:
-                messages+=[self.discard_by_player(0,None)]
+            self.next_round()
+            #self.player.seat=
+            #self.player.hand=self.game.get_next_deck()
+
+            init_msg=self.initialize_game(self.game_info)
+            self.send_messages(conn,init_msg)
+            i=self.game.game_info.dealer_seat
+            while i!=self.player.seat:
+                if self.is_game_over() or self.is_round_over():
+                    break
+                else:
+                    messages.append(self.discard_by_player(i, None))
+                i=(i+1)%4
+            if not self.is_game_over() and not self.is_round_over():
+                messages.append(self.tile_drawn_message(self.game.get_next_tile()))
+
         elif t=='reach':
             print("player called riichi")
             messages+=[]
         elif t=='d': # discard a tile
             print("player discarded a tile (east)")
-            msgs=[]
-            for i in range(1,4):
-                if self.is_game_over() or self.is_round_over():
-                    break
-                else:
-                    msgs.append(self.discard_by_player(i,None))
-            if not self.is_game_over() and not self.is_round_over():
-                msgs.append(self.tile_drawn_message(self.game.get_next_tile()))
-            messages+=msgs
+            messages+=self.next_turn()
         elif t=='e':
             print("player discarded a tile (south)")
         elif t=='f':
@@ -383,6 +409,19 @@ class TenhouServerSocket:
             print("player called chi/pon/kan/riichi/ron/tsumo")
 
         return messages
+
+    def next_turn(self) -> list[Message]:
+        msgs=[]
+        for i in range(1,4):
+            if self.is_game_over() or self.is_round_over():
+                break
+            else:
+                msgs.append(self.discard_by_player(i, None))
+            self.game.game_info.next_player()
+
+        if not self.is_game_over() and not self.is_round_over():
+            msgs.append(self.tile_drawn_message(self.game.get_next_tile()))
+        return msgs
 
     def is_game_over(self):
         return self.game.is_game_over()
@@ -401,6 +440,17 @@ class TenhouServerSocket:
             "hai":self.list_stringify(hand_tiles),
             "ten":self.list_stringify(win_scores)
         })
+
+    def next_round(self):
+        if self.game.is_round_over():
+            print("game: round over")
+            self.game.next_round()
+        else:
+            self.game.restart(self.game_info,None)
+        players=[self.get_player_by_seat(i) for i in range(4)]
+        for p in players:
+            p.seat=self.game.get_next_player_seat()
+            p.hand=self.game.get_next_hand()
 
     def round_over_message(self) -> Message:
         args=dict()
@@ -497,7 +547,9 @@ class TenhouServerSocket:
             "PF4":"1", #rating
             "nintei":"1" #new level
         })
-        self.player=Player(name=name,tid=tid,sx=sx,seat=0,initial_hand=None)
+        if self.player is None or not self.player.is_initialized():
+            print("player init")
+            self.player=Player(seat=0,name=name, tid=tid,sx=sx)
         return message
 
     def create_auth_message(self, token:str):
