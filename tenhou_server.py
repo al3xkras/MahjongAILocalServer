@@ -13,23 +13,52 @@ Content-Type: text/html
 import random
 
 class MahjongGame:
-    def __init__(self, random_seed):
+    def __init__(self, game_info:"GameInfo", random_seed=None):
         self.seed=random_seed
         self.tiles=list(range(136))
+        self.seats=list(range(4))
+        self.game_info=game_info
         self.last_tile_taken=None
-        random.seed(self.seed)
+        self.is_finished=False
+        if self.seed is not None:
+            random.seed(self.seed)
+        else:
+            random.seed()
         random.shuffle(self.tiles)
+        random.shuffle(self.seats)
 
     def get_next_deck(self):
         return Hand([self.get_next_tile() for _ in range(13)])
 
     def get_next_tile(self):
         tile=self.tiles.pop(0)
+        self.is_finished=len(self.tiles)==0
         self.last_tile_taken=tile
         return tile
 
     def get_last_tile_taken(self):
         return self.last_tile_taken
+
+    def get_next_player_seat(self):
+        assert len(self.seats)>0
+        return self.seats.pop(0)
+
+    def next_round(self):
+        self.game_info.next_round(
+            bonus_tiles=[27],
+            scores=[20000,23000,25000,25000],
+            dealer_seat=random.randint(0,3)
+        )
+        self.__init__(self.game_info,self.seed)
+
+    def finish_game(self):
+        self.is_finished=True
+
+    def is_round_over(self):
+        return self.is_finished
+
+    def is_game_over(self):
+        return self.is_finished and self.game_info.is_last_round()
 
 class Message:
     def __init__(self, raw_string:str):
@@ -96,8 +125,6 @@ class Player:
         self.is_tournament=None
         self.is_anonymous=None
         self.is_regular=None
-        self.game_accepted=False
-        self.is_ready_to_play=False
         self.name=name
         self.tid=tid
         self.sx=sx
@@ -110,9 +137,6 @@ class Player:
             self.is_regular is not None,
             self.is_anonymous is not None,
         ))
-
-    def is_ready(self):
-        return self.is_initialized() and self.game_accepted and self.is_ready_to_play
 
     def discard_random(self,tile_drawn:int):
         tiles=self.hand.tiles
@@ -128,41 +152,68 @@ class Player:
         tiles[i]=tile_drawn
         return tile
 
-
     def get_hand(self) -> "Hand":
         if self.hand is None:
             raise Exception("player hand is not initialized")
         return self.hand
 
+    def next_round(self,hand:"Hand",seat:int):
+        self.hand=hand
+        self.seat=seat
+
 class GameInfo:
-    def __init__(self,round_number,honba_sticks,
-            reach_sticks,bonus_tile_indicator,
-            dealer,scores):
-        self.round_number,self.honba_sticks,self.reach_sticks,self.bonus_tile_indicator,self.dealer,self.scores=\
-            round_number,honba_sticks,\
-            reach_sticks,bonus_tile_indicator,\
-            dealer,scores
+    def __init__(self, round_number:int, honba_sticks:int,
+                 reach_sticks:int, bonus_tiles:list[int],
+                 dealer_seat:int, scores:list[int]):
+        self.round_number=round_number
+        self.honba_sticks=honba_sticks
+        self.reach_sticks=reach_sticks
+        self.bonus_tiles=bonus_tiles
+        self.dealer_seat=dealer_seat
+        self.scores=scores
+        self.max_rounds=8
 
     @staticmethod
-    def random():
-        oya=0
+    def initial():
+        oya=random.randint(0,3)
         ten=[
-            "25000",
-            "25000",
-            "25000",
-            "25000",
+            25000,25000,25000,25000
         ]
-        round_number="0"
-        honba_sticks="0"
-        reach_sticks="0"
+        round_number=0
+        honba_sticks=0
+        reach_sticks=0
         bonus_tiles=[
-            "1","5","17" # max length: 5
+            27 # max length: 5
         ]
         return GameInfo(round_number=round_number,
-            honba_sticks=honba_sticks,reach_sticks=reach_sticks,
-            bonus_tile_indicator=bonus_tiles,dealer=oya,
-            scores=ten)
+                honba_sticks=honba_sticks, reach_sticks=reach_sticks,
+                bonus_tiles=bonus_tiles, dealer_seat=oya,
+                scores=ten)
 
+    def open_next_bonus_tile(self, tile:int):
+        self.bonus_tiles.append(tile)
+
+    def set_scores(self,scores:list[int]):
+        self.scores=scores
+
+    def set_dealer(self, dealer_seat):
+        self.dealer_seat=dealer_seat
+
+    def get_dealer(self):
+        return self.dealer_seat
+
+    def next_round(self,scores,dealer_seat,bonus_tiles):
+        assert self.round_number<self.max_rounds
+        self.round_number+=1
+        self.set_scores(scores)
+        self.dealer_seat=dealer_seat
+        self.set_bonus_tiles(bonus_tiles)
+
+    def is_last_round(self):
+        return self.round_number==self.max_rounds
+
+    def set_bonus_tiles(self,bonus_tiles:list[int]):
+        self.bonus_tiles=bonus_tiles
 
 class Hand:
     delim=","
@@ -189,8 +240,9 @@ class TenhouServerSocket:
 
         self.skt = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 
-        self.player=None
-        self.game=MahjongGame(129487923519)
+        self.player=Player("","","",False)
+        self.game_info=GameInfo.initial()
+        self.game=MahjongGame(self.game_info)
 
         self.opponents=[
             Player(seat=1,name="Player1",tid="1",sx="M",authenticated=True,initial_hand=self.game.get_next_deck()),
@@ -247,22 +299,32 @@ class TenhouServerSocket:
     def process_message(self, conn:socket.socket, message:Message) -> Message | list[Message]:
         t=message.type.lower()
         print(message)
+        messages = []
+
+        if self.is_game_over():
+            print("game over")
+            messages.append(self.game_over_message())
+        elif self.is_round_over():
+            print("round over")
+            self.game.next_round()
+            for i in range(4):
+                player=self.get_player_by_seat(i)
+                player.next_round(seat=self.game.get_next_player_seat(),hand=self.game.get_next_deck())
+            messages.append(self.round_over_message())
         if t=="helo":
             print("init player")
             name=message.args['name']
             tid=message.args['tid']
             sx=message.args['sx']
-            return self.initialize_player(conn,name,tid,sx)
-
+            messages+=[self.initialize_player(conn,name,tid,sx)]
         elif t=='z': # keep alive
-            return []
-
+            pass
         elif t=='auth':
             print("authenticate")
             if self.player is None:
                 self.send_error(conn,"not authenticated")
             token=message['val']
-            return self.create_auth_message(token)
+            messages+=[self.create_auth_message(token)]
 
         elif t=='pxr':
             print("init game type")
@@ -270,7 +332,7 @@ class TenhouServerSocket:
                 if not isinstance(self.player,Player):
                     self.player=None
                 self.send_error(conn,"not authenticated")
-                return []
+                return messages
             v=message['V']
             is_tournament=v=='-1'
             is_anonymous=v=='1'
@@ -279,33 +341,38 @@ class TenhouServerSocket:
             self.player.is_tournament=is_tournament
             self.player.is_anonymous=is_anonymous
             self.player.is_regular=is_regular
-            return []
+            messages+=[]
         elif t=="join":
             print("join game")
             game_type=message['t']
-            return self.join_game(game_type)
+            messages+=self.join_game(game_type)
         elif t=='gok':
             print("game accepted")
             self.player.game_accepted=True
-            return []
+            messages+=[]
         elif t=='nextready':
             print("player ready")
             self.player.is_ready_to_play=True
-            m1=self.initialize_game(GameInfo.random())
+            self.player.hand=self.game.get_next_deck()
+            m1=self.initialize_game(self.game_info)
             if self.player.seat==0:
-                return [m1, self.tile_drawn_message(self.game.get_next_tile())]
+                messages+=[m1, self.tile_drawn_message(self.game.get_next_tile())]
             else:
-                self.discard_by_player(0,None)
-            return m1
-        elif t=='n': # call a win
-            print("player called a win")
-            return []
+                messages+=[self.discard_by_player(0,None)]
         elif t=='reach':
             print("player called riichi")
-            return []
+            messages+=[]
         elif t=='d': # discard a tile
             print("player discarded a tile (east)")
-            return [self.discard_by_player(1,None),self.discard_by_player(2,None),self.discard_by_player(3,None),self.tile_drawn_message(self.game.get_next_tile())]
+            msgs=[]
+            for i in range(1,4):
+                if self.is_game_over() or self.is_round_over():
+                    break
+                else:
+                    msgs.append(self.discard_by_player(i,None))
+            if not self.is_game_over() and not self.is_round_over():
+                msgs.append(self.tile_drawn_message(self.game.get_next_tile()))
+            messages+=msgs
         elif t=='e':
             print("player discarded a tile (south)")
         elif t=='f':
@@ -314,7 +381,32 @@ class TenhouServerSocket:
             print("player discarded a tile (north)")
         elif t=='n':
             print("player called chi/pon/kan/riichi/ron/tsumo")
-        return []
+
+        return messages
+
+    def is_game_over(self):
+        return self.game.is_game_over()
+
+    def is_round_over(self):
+        return self.game.is_round_over()
+
+    def game_over_message(self):
+        return Message.for_type_and_args("owari")
+
+    def round_over_message_winner(self, winner_seat:int, win_from:int, win_tile:int, hand_tiles:list[int], win_scores:list[int]):
+        return Message.for_type_and_args("agari",{
+            "who":winner_seat,
+            "fromWho":win_from,
+            "machi":win_tile,
+            "hai":self.list_stringify(hand_tiles),
+            "ten":self.list_stringify(win_scores)
+        })
+
+    def round_over_message(self) -> Message:
+        args=dict()
+        for i in range(4):
+            args["hai%d"%i]=self.get_player_by_seat(i).get_hand().stringify()
+        return Message.for_type_and_args("RYUUKYOKU",args)
 
     def send_error(self, connection:socket.socket, message):
         m=Message.for_type_and_args("err",{
@@ -352,11 +444,11 @@ class TenhouServerSocket:
     def initialize_game(self,game_info:GameInfo)->Message:
         some_nums=[1,2]
         seed=[game_info.round_number,game_info.honba_sticks,game_info.reach_sticks,
-            ] + some_nums + game_info.bonus_tile_indicator
+            ] + some_nums + game_info.bonus_tiles
         return Message.for_type_and_args("init",{
             "seed":self.list_stringify(seed),
             "ten":self.list_stringify(game_info.scores),
-            "oya":game_info.dealer,
+            "oya":game_info.dealer_seat,
             "hai":self.player.hand.stringify()
         })
 
@@ -364,7 +456,7 @@ class TenhouServerSocket:
     def list_stringify(lst:list):
         return ",".join(map(str,lst))
 
-    def join_game(self, game_type) -> Message|list[Message]:
+    def join_game(self, game_type) -> list[Message]:
         join_msg=Message.for_type_and_args("GO",{
             "type":game_type[0],
         })
@@ -396,14 +488,16 @@ class TenhouServerSocket:
 
     def initialize_player(self,conn:socket.socket,
                           name,tid,sx) -> Message:
-        if self.player is not None:
+        if self.player is not None and self.player.is_initialized():
             self.send_error(conn,"already authenticated")
+        elif self.player is not None:
+            self.player=None
         message=Message.for_type_and_args("hello",{
             "auth":"123abc",
             "PF4":"1", #rating
             "nintei":"1" #new level
         })
-        self.player=Player(name=name,tid=tid,sx=sx,seat=0,initial_hand=self.game.get_next_deck())
+        self.player=Player(name=name,tid=tid,sx=sx,seat=0,initial_hand=None)
         return message
 
     def create_auth_message(self, token:str):

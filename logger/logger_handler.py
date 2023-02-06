@@ -53,8 +53,8 @@ class Logger:
             self.add_line(bf_msg)
         self.logger_buffer = []
 
-    def add_round_end_result(self, msg):
-        open(self.scores_path, 'a').write(msg)
+    def add_round_end_result(self, msg:str):
+        open(self.scores_path, 'ba').write(msg.encode("utf8"))
 
     def add_game_end_result(self, rk):
         if os.path.isfile(self.rank_path):
