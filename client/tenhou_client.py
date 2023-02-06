@@ -513,6 +513,7 @@ class TenhouClient:
 
     def _handle_draw_tile(self, msg):
         drawn_tile_136 = TenhouParser.parse_tile(msg)
+        print("tile: ",drawn_tile_136)
         self.drawer and self.drawer.draw(drawn_tile_136)
 
         if not self.game_table.bot.reach_status:
