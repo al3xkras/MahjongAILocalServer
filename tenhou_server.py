@@ -1,3 +1,4 @@
+import random
 import socket
 
 server_address = ('localhost', 10001)
@@ -9,31 +10,36 @@ Content-Type: text/html
 </html>
 """
 
+import random
+
 class MahjongGame:
     def __init__(self, random_seed):
         self.seed=random_seed
         self.tiles=list(range(136))
-        import random
+        self.last_tile_taken=None
         random.seed(self.seed)
         random.shuffle(self.tiles)
 
     def get_next_deck(self):
-        deck,tiles=self.tiles[:14],self.tiles[14:]
-        self.tiles=tiles
-        return Hand(deck)
+        return Hand([self.get_next_tile() for _ in range(13)])
 
     def get_next_tile(self):
-        return self.tiles.pop(0)
+        tile=self.tiles.pop(0)
+        self.last_tile_taken=tile
+        return tile
+
+    def get_last_tile_taken(self):
+        return self.last_tile_taken
 
 class Message:
     def __init__(self, raw_string:str):
         self.type,self.args=self.parse_message(raw_string)
 
     @staticmethod
-    def for_type_and_args(msg_type:str,args:dict):
+    def for_type_and_args(msg_type:str,args=None):
         m=Message("")
         m.type=msg_type
-        m.args=args
+        m.args=args if args is not None else dict()
         return m
 
     def stringify(self) -> str:
@@ -96,7 +102,7 @@ class Player:
         self.tid=tid
         self.sx=sx
         self.seat=seat
-        self.initial_hand=initial_hand
+        self.hand=initial_hand
 
     def is_initialized(self):
         return self.authenticated and all((
@@ -107,6 +113,26 @@ class Player:
 
     def is_ready(self):
         return self.is_initialized() and self.game_accepted and self.is_ready_to_play
+
+    def discard_random(self,tile_drawn:int):
+        tiles=self.hand.tiles
+        i=random.randint(0,len(tiles)-1)
+        d=tiles[i]
+        tiles[i]=tile_drawn
+        return d
+
+    def discard(self, tile_number:int, tile_drawn:int):
+        tiles=self.get_hand().get_tiles()
+        i = tiles.index(tile_number)
+        tile = tiles[i]
+        tiles[i]=tile_drawn
+        return tile
+
+
+    def get_hand(self) -> "Hand":
+        if self.hand is None:
+            raise Exception("player hand is not initialized")
+        return self.hand
 
 class GameInfo:
     def __init__(self,round_number,honba_sticks,
@@ -140,20 +166,21 @@ class GameInfo:
 
 class Hand:
     delim=","
-    def __init__(self, tiles):
+    def __init__(self, tiles:list[int]):
         self.tiles=tiles
-
-    @staticmethod
-    def random_hand() -> "Hand":
-        return Hand([
-            0,0,0,1,2,3,1,2,3,6,28,14,32,
-        ])
 
     def stringify(self):
         return self.delim.join(map(str,self.tiles))
 
+    def get_tiles(self) -> list[int]:
+        return self.tiles
+
 class TenhouServerSocket:
     message_sep="\x00"
+    tile_msg_type_by_seat={
+        0:"d",1:"e",
+        2:"f",3:"g"
+    }
 
     def __init__(self, address):
         self.exit=False
@@ -166,10 +193,12 @@ class TenhouServerSocket:
         self.game=MahjongGame(129487923519)
 
         self.opponents=[
-            Player(name="Player1",tid="1",sx="M",authenticated=True,initial_hand=self.game.get_next_deck()),
-            Player(name="Player1",tid="2",sx="M",authenticated=True,initial_hand=self.game.get_next_deck()),
-            Player(name="Player1",tid="3",sx="M",authenticated=True,initial_hand=self.game.get_next_deck())
+            Player(seat=1,name="Player1",tid="1",sx="M",authenticated=True,initial_hand=self.game.get_next_deck()),
+            Player(seat=2,name="Player1",tid="2",sx="M",authenticated=True,initial_hand=self.game.get_next_deck()),
+            Player(seat=3,name="Player1",tid="3",sx="M",authenticated=True,initial_hand=self.game.get_next_deck())
         ]
+
+        self.last_discarded_tile=None
 
     def start(self):
         self.skt.bind((self.url,self.port))
@@ -264,9 +293,9 @@ class TenhouServerSocket:
             self.player.is_ready_to_play=True
             m1=self.initialize_game(GameInfo.random())
             if self.player.seat==0:
-                return [m1,self.next_tile_message()]
+                return [m1, self.tile_drawn_message(self.game.get_next_tile())]
             else:
-                self.get_opponent_by_seat(0).discard_tile(self)
+                self.discard_by_player(0,None)
             return m1
         elif t=='n': # call a win
             print("player called a win")
@@ -276,17 +305,15 @@ class TenhouServerSocket:
             return []
         elif t=='d': # discard a tile
             print("player discarded a tile (east)")
-            messages=[]
-            for op in self.opponents:
-                tile_msg=self.discard_by_opponent(op)
-                messages.append(tile_msg)
-            return []
+            return [self.discard_by_player(1,None),self.discard_by_player(2,None),self.discard_by_player(3,None),self.tile_drawn_message(self.game.get_next_tile())]
         elif t=='e':
             print("player discarded a tile (south)")
         elif t=='f':
             print("player discarded a tile (east)")
         elif t=='g':
             print("player discarded a tile (north)")
+        elif t=='n':
+            print("player called chi/pon/kan/riichi/ron/tsumo")
         return []
 
     def send_error(self, connection:socket.socket, message):
@@ -295,17 +322,32 @@ class TenhouServerSocket:
         })
         self.send_messages(connection,m)
 
-    def next_tile_message(self):
-        t=self.next_tile()
-        return Message.for_type_and_args("T%d"%t,{
-        })
+    def get_player_by_seat(self,seat_num):
+        if self.player.seat==seat_num:
+            return self.player
+        return [x for x in self.opponents if x.seat==seat_num][0]
 
-    def discard_by_opponent(self, op_id:int):
-        opponent=self.opponents[op_id]
-        message_type=self.discard_tile_msg_type_by_seat[opponent.seat]
+    def tile_message(self, seat:int, tile:int) -> Message:
+        seat_str=self.tile_msg_type_by_seat[seat]
+        return Message.for_type_and_args("%s%d"%(seat_str,tile))
 
-    def next_tile(self):
-        return self.game.get_next_tile()
+    def tile_drawn_message(self, tile:int) -> Message:
+        return Message("T%d"%tile)
+
+    def discard_by_player(self, seat, tile_number:int|None) -> Message:
+        player=self.get_player_by_seat(seat)
+        tile_drawn=self.game.get_next_tile()
+        if tile_number is None:
+            tile=player.discard_random(tile_drawn)
+        else:
+            tile = player.discard(tile_number,tile_drawn)
+        self.last_discarded_tile=tile
+        return self.tile_message(seat,tile)
+
+    def call_pon_by_opponent(self,op_id:int) -> Message|list[Message]:
+        if self.last_discarded_tile is None:
+            return []
+        return Message.for_type_and_args("some type")
 
     def initialize_game(self,game_info:GameInfo)->Message:
         some_nums=[1,2]
@@ -315,7 +357,7 @@ class TenhouServerSocket:
             "seed":self.list_stringify(seed),
             "ten":self.list_stringify(game_info.scores),
             "oya":game_info.dealer,
-            "hai":self.player.initial_hand.stringify()
+            "hai":self.player.hand.stringify()
         })
 
     @staticmethod
@@ -332,8 +374,6 @@ class TenhouServerSocket:
         })
         op_info=self.opponents_info_message(self.opponents)
         out = [join_msg,game_msg,op_info]
-        if self.player.seat==0:
-            out.append(self.next_tile_message())
         return out
 
     def opponents_info_message(self, opponents:list[Player]) -> Message:
