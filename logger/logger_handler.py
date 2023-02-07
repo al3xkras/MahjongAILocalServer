@@ -8,6 +8,9 @@ import os
 __author__ = "Jianyang Tang"
 __email__ = "jian4yang2.tang1@gmail.com"
 
+import locale
+if locale.getpreferredencoding().upper() != 'UTF-8':
+    locale.setlocale(locale.LC_ALL, 'en_US.UTF-8')
 
 class Logger:
 
@@ -19,6 +22,7 @@ class Logger:
         self.buffer_mode = buffer_mode
         self.logger_buffer = []
         self._set_up_logger()
+        logging.basicConfig(encoding="utf8")
         self.lg = logging.getLogger('{}_{}'.format(log_id, ai_id))
 
     def _set_up_logger(self):
@@ -34,7 +38,7 @@ class Logger:
         ch = logging.StreamHandler()
         ch.setLevel(logging.DEBUG)
         file_name = '{}_{}.log'.format(self.ai_id, datetime.datetime.now().strftime('%Y-%m-%d_%H_%M_%S'))
-        fh = logging.FileHandler(raw_dir + file_name)
+        fh = logging.FileHandler(raw_dir + file_name,encoding="utf-8")
         fh.setLevel(logging.DEBUG)
         formatter = logging.Formatter('%(asctime)s: %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
         ch.setFormatter(formatter)
@@ -45,7 +49,7 @@ class Logger:
         self.rank_path = logs_directory + "ranks.txt"
 
     def add_line(self, msg):
-        self.lg.info(str(msg).encode("utf8"))
+        self.lg.info(msg)
 
     def flush_buffer(self):
         self.add_line('    ' + '-' * 50)

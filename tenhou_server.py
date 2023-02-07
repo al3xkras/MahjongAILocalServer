@@ -519,6 +519,8 @@ class TenhouServerSocket:
         return messages
 
     def handle_meld(self,conn:socket.socket,message:Message):
+        if self.is_round_over() or self.is_game_over():
+            return
         messages=[]
         print(message)
         assert message.type.lower()=='n'
