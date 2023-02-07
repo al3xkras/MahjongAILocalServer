@@ -288,7 +288,7 @@ class TenhouServerSocket:
 
         self.player=Player("","","",False)
         self.game_info=GameInfo.initial()
-        self.game=MahjongGame(self.game_info)
+        self.game=MahjongGame(self.game_info,random_seed=919492783)
 
         self.opponents=[
             Player(seat=1, name="Player1",
@@ -415,6 +415,8 @@ class TenhouServerSocket:
                     break
                 else:
                     messages.append(self.draw_tile_by_player_message(i,""))
+                    if self.is_game_over() or self.is_round_over():
+                        break
                     messages.append(self.discard_by_player(i, None))
                 i=(i+1)%4
             if not self.is_game_over() and not self.is_round_over():
@@ -427,7 +429,7 @@ class TenhouServerSocket:
         elif t=='d':
             print("player discarded a tile")
             tile=int(message['p'])
-            messages+=self.next_turn()
+            messages+=self.next_turn(conn)
         elif t=='n':
             print("player called chi/pon/kan/ron/tsumo")
             print(message)
@@ -456,18 +458,24 @@ class TenhouServerSocket:
 
         return messages
 
-    def next_turn(self) -> list[Message]:
-        msgs=[]
-        for i in range(0,4):
+    def next_turn(self,conn:socket.socket) -> list[Message]:
+        def send(message):
+            self.send_messages(conn,message)
+            self._wait_for_a_while()
+        for _ in range(self.player.seat+1,self.player.seat+4):
+            i = _%4
             if self.is_game_over() or self.is_round_over():
                 break
             elif i!=self.player.seat:
-                msgs.append(self.draw_tile_by_player_message(i,""))
-                msgs.append(self.discard_by_player(i, None))
+                send(self.draw_tile_by_player_message(i,""))
+                if self.is_game_over() or self.is_round_over():
+                    break
+                send(self.discard_by_player(i, None))
 
         if not self.is_game_over() and not self.is_round_over():
-            msgs.append(self.draw_tile_by_player_message(self.player.seat,self.game.get_next_tile()))
-        return msgs
+            send(self.draw_tile_by_player_message(self.player.seat,self.game.get_next_tile()))
+        return []
+
 
     def call_meld_by_player(self) -> Message:
         return Message.for_type_and_args("N",args={
@@ -531,23 +539,39 @@ class TenhouServerSocket:
             return self.player
         return [x for x in self.opponents if x.seat==seat_num][0]
 
-    def tile_message(self, seat:int, tile:int) -> Message:
-        seat_str=self.tile_msg_type_by_seat[seat]
+    def discarded_tile_message(self, seat:int, tile:int) -> Message:
+        seat_str=self.discarded_tile_message_type_by_seat(seat)
         args=dict()
         if self.player.can_call_kan(tile):
             args['t']="3"
         elif self.player.can_call_pon(tile) or self.player.can_call_chii(seat,tile):
             args['t']=""
-
         return Message.for_type_and_args("%s%d"%(seat_str,tile),args)
 
-    def tile_message_type_by_seat(self,seat:int):
+    def _wait_for_a_while(self):
+        time.sleep(0.3)
+
+    def discarded_tile_message_type_by_seat(self, seat:int):
         lst=['d','e','f','g']
         return lst[(seat-self.player.seat)%4]
 
+    def discarded_tile_seat_by_message_type(self, msg_type: str):
+        lst = ['d', 'e', 'f', 'g']
+        assert msg_type in lst
+        return (self.player.seat+lst.index(msg_type))%4
+
+    def drawn_tile_message_type_by_seat(self, seat:int):
+        lst=['t','u','v','w']
+        return lst[(seat-self.player.seat)%4]
+
+    def drawn_tile_seat_by_message_type(self, msg_type: str):
+        lst=['t','u','v','w']
+        assert msg_type in lst
+        return (self.player.seat+lst.index(msg_type))%4
+
     def draw_tile_by_player_message(self, seat:int, tile:int|str) -> Message:
-        lst=["t","u","v","w"]
-        return Message.for_type_and_args("%s%s"%(lst[(seat-self.player.seat)%4],tile))
+        t=self.drawn_tile_message_type_by_seat(seat)
+        return Message.for_type_and_args("%s%s"%(t,tile))
 
     def discard_by_player(self, seat, tile_number:int|None) -> Message:
         player=self.get_player_by_seat(seat)
@@ -557,7 +581,7 @@ class TenhouServerSocket:
         else:
             tile = player.discard(tile_number,tile_drawn)
         self.last_discarded_tile=tile
-        return self.tile_message(seat,tile)
+        return self.discarded_tile_message(seat, tile)
 
     def call_pon_by_opponent(self,op_id:int) -> Message|list[Message]:
         if self.last_discarded_tile is None:
