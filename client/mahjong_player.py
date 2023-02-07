@@ -217,7 +217,8 @@ class MainPlayer(Player):
         return hand
 
     def tile_34_to_136(self, tile34):
-        return [t136 for t136 in self.tiles136 if tile34 == (t136 // 4)][-1]
+        l = [t136 for t136 in self.tiles136 if tile34 == (t136 // 4)]
+        return l[len(l)-1]
 
     @property
     def hand34(self):

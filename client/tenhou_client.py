@@ -722,7 +722,8 @@ class TenhouClient:
         self.keep_alive_thread.start()
 
     def _wait_for_a_while(self):
-        sleep(self.WAIT_FOR_A_WHILE)
+        pass
+        #sleep(self.WAIT_FOR_A_WHILE)
 
     def _parse_game_rule(self, game_type):
         rules = bin(int(game_type)).replace('0b', '')[::-1]
