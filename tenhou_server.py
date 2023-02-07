@@ -210,7 +210,6 @@ class GameInfo:
         self.reach_sticks=reach_sticks
         self.bonus_tiles=bonus_tiles
         self.dealer_seat=dealer_seat
-        self.active_player=dealer_seat
         self.scores=scores
         self.max_rounds=8
 
@@ -255,12 +254,6 @@ class GameInfo:
         self.set_scores(scores)
         self.dealer_seat=dealer_seat
         self.set_bonus_tiles(bonus_tiles)
-
-    def get_active_player_seat(self):
-        return self.active_player
-
-    def next_player(self):
-        self.active_player=(self.active_player+1)%4
 
     def is_last_round(self):
         return self.round_number>=self.max_rounds
@@ -421,52 +414,76 @@ class TenhouServerSocket:
                 if self.is_game_over() or self.is_round_over():
                     break
                 else:
+                    messages.append(self.draw_tile_by_player_message(i,""))
                     messages.append(self.discard_by_player(i, None))
                 i=(i+1)%4
             if not self.is_game_over() and not self.is_round_over():
-                messages.append(self.tile_drawn_message(self.game.get_next_tile()))
+                messages.append(self.draw_tile_by_player_message(self.player.seat, self.game.get_next_tile()))
 
         elif t=='reach':
             print("player called riichi")
+            tile=int(message['hai'])
             messages+=[]
-        elif t=='d': # discard a tile
-            print("player discarded a tile (east)")
+        elif t=='d':
+            print("player discarded a tile")
+            tile=int(message['p'])
             messages+=self.next_turn()
-        elif t=='e':
-            print("player discarded a tile (south)")
-        elif t=='f':
-            print("player discarded a tile (east)")
-        elif t=='g':
-            print("player discarded a tile (north)")
         elif t=='n':
-            print("player called chi/pon/kan/riichi/ron/tsumo")
-            meld_type=int(message.args.get('type',-1))
+            print("player called chi/pon/kan/ron/tsumo")
+            print(message)
+            meld_type=int(message.args.get('type',0))
+            print("meld type:",meld_type)
             #types:
-            # 3 - call chii
+            # 0 - cancel meld
             # 1 - call pon
             # 2 - call an open kan
-            # 5 - call chankan
-            # 4 - call kan
-            tile_called=int(message.args.get('hai',-1))
-            if meld_type==5 or meld_type==2 or meld_type==4:
+            # 3 - call chii
+            # 4 - call a kan
+            # 5 - call a chankan
+            # 6 - claim victory
+            # 7,9 - win check after drawing
+            if meld_type==0: # meld cancelled
+                pass
+            elif meld_type==5 or meld_type==2 or meld_type==4:
                 print("player called a kan")
+                tile_called = int(message.args.get('hai', -1))
+                print("tile called (kan):",tile_called)
                 #draw next tile after calling a kan
-                messages.append(self.tile_drawn_message(self.game.get_next_tile()))
+                messages.append(self.draw_tile_by_player_message(self.player.seat,self.game.get_next_tile()))
+            elif meld_type==3:
+                tile0=int(message['hai0'])
+                tile1=int(message['hai1'])
 
         return messages
 
     def next_turn(self) -> list[Message]:
         msgs=[]
-        for i in range(1,4):
+        for i in range(0,4):
             if self.is_game_over() or self.is_round_over():
                 break
-            else:
+            elif i!=self.player.seat:
+                msgs.append(self.draw_tile_by_player_message(i,""))
                 msgs.append(self.discard_by_player(i, None))
-            self.game.game_info.next_player()
 
         if not self.is_game_over() and not self.is_round_over():
-            msgs.append(self.tile_drawn_message(self.game.get_next_tile()))
+            msgs.append(self.draw_tile_by_player_message(self.player.seat,self.game.get_next_tile()))
         return msgs
+
+    def call_meld_by_player(self) -> Message:
+        return Message.for_type_and_args("N",args={
+            "who":"foo"
+        })
+
+    def reveal_bonus_indicator(self, tile:int) -> Message:
+        return Message.for_type_and_args("dora",args={
+            "hai":str(tile)
+        })
+
+    def call_riichi_by_opponent(self, opponent_seat:int):
+        return Message.for_type_and_args("reach",args={
+            "step":"1",
+            "who":"bar",
+        })
 
     def is_game_over(self):
         return self.game.is_game_over()
@@ -528,8 +545,9 @@ class TenhouServerSocket:
         lst=['d','e','f','g']
         return lst[(seat-self.player.seat)%4]
 
-    def tile_drawn_message(self, tile:int) -> Message:
-        return Message("T%d"%tile)
+    def draw_tile_by_player_message(self, seat:int, tile:int|str) -> Message:
+        lst=["t","u","v","w"]
+        return Message.for_type_and_args("%s%s"%(lst[(seat-self.player.seat)%4],tile))
 
     def discard_by_player(self, seat, tile_number:int|None) -> Message:
         player=self.get_player_by_seat(seat)
