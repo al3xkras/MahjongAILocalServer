@@ -124,7 +124,7 @@ class TenhouParser:
         return meld
 
     @staticmethod
-    def parse_chi(data, meld):
+    def parse_chi(data, meld,alternative=True):
         # chow encoding     xxxxxx    |    0    |    xx    |    xx     |   xx   |   x        |   xx
         #                base/which                 tile3     tile2      tile1     is chow       who called
         # e.g. 100000       0       11      01        00      1      11
@@ -236,3 +236,18 @@ class TenhouParser:
         postfix = format(a, '2x') + format(b, '2x')
 
         return first_part + '-' + postfix
+
+if __name__ == '__main__':
+    # chow encoding     xxxxxx    |    0    |    xx    |    xx     |   xx   |   x        |   xx
+    #                base/which                 tile3     tile2      tile1     is chow       who called
+    # e.g. 100000       0       11      01        00      1      11
+    # 11: player 3 called this meld
+    # 1: is a chow set
+    # 00: first of four tiles
+    # 01: second of four tiles
+    # 11: fourth of four tiles
+    # 0: no meaning
+    # 100000: =32  32//3 = 10 --> the tenth chow set is 456p
+    #              32 % 3 = 2 --> the third tile was the called tile
+    # totally: player 3 called the meld 456p with 6p
+    pass

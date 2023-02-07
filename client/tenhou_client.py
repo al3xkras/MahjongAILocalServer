@@ -662,6 +662,7 @@ class TenhouClient:
             # check chow/pon
             may_call_chi = (msg[1].lower() == 'g')
             meld, tile_to_discard = self.game_table.bot.try_to_call_meld(tile, may_call_chi)
+
             if meld:
                 meld_type = '3' if meld.type == Meld.CHI else '1'
                 self_tiles = [t for t in meld.tiles if t != meld.called_tile]

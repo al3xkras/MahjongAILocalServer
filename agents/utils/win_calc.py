@@ -571,3 +571,10 @@ class WinCalc:
         )
         base_point, lose_desc = WinCalc.cal_points(fan, base, bot_state['dlr'], False)
         return base_point + 1000 * bot_state['rcstk'] + bot_state['hbstk'] * 300
+
+
+if __name__ == '__main__':
+    a=WinCalc.win_parse([
+        0,0,0,1,1,1,2,2,2,3,3,4,4
+    ],6)
+    print(a)
