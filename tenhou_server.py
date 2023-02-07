@@ -2,6 +2,7 @@ import random
 import socket
 import threading
 import time
+import traceback
 from collections import deque
 
 from agents.utils.win_calc import WinCalc
@@ -21,7 +22,7 @@ class MahjongGame:
             random.seed(self.seed)
         else:
             random.seed()
-        random.shuffle(self.tiles)
+        #random.shuffle(self.tiles)
         self.seats.rotate(random.randint(0, 3))
         self.last_drawn_tile = None
         self.winner_seat=None
@@ -85,6 +86,7 @@ class MahjongGame:
 class Message:
     def __init__(self, raw_string: str):
         self.type, self.args = self.parse_message(raw_string)
+        self.round_number=None
 
     @staticmethod
     def for_type_and_args(msg_type: str, args=None):
@@ -192,7 +194,14 @@ class Player:
             self.last_drawn_tile=None
             return tile136
         hand = self.get_hand()
-        i = hand.tiles.index(tile136)
+        f=MahjongGame.tile_from_136_to_34
+        i=0
+        for i in range(len(hand.tiles)):
+            x=hand.tiles[i]
+            if f(x)==f(tile136):
+                break
+        if f(hand.tiles[i])!=f(tile136):
+            raise Exception("no such tile")
         tile = hand[i]
         hand[i] = self.get_last_drawn_tile()
         self.last_drawn_tile = None
@@ -209,7 +218,7 @@ class Player:
         return self.hand.get_tiles(fmt=34).count(f(tile136)) >= 3
 
     def can_call_chii(self, seat: int, tile136: int):
-        if (seat + 1) % 4 != self.seat:
+        if (self.seat - 1) % 4 != seat:
             return False
         f = MahjongGame.tile_from_136_to_34
         tile34 = f(tile136)
@@ -239,9 +248,17 @@ class Player:
         if self.last_drawn_tile is not None and self.last_drawn_tile in hand_tiles136:
             hand_tiles136.remove(self.last_drawn_tile)
             self.last_drawn_tile=None
-        for x in hand_tiles136:
-            self.hand.tiles.remove(x)
 
+        hand_tiles_upd=list()
+        for x in self.hand.tiles:
+            f=MahjongGame.tile_from_136_to_34
+            if len(hand_tiles136)==0:
+                break
+            if f(x)==f(hand_tiles136[0]):
+                hand_tiles136.pop(0)
+            else:
+                hand_tiles_upd.append(x)
+        self.hand.tiles=hand_tiles_upd
         self.table_tiles.append(tile136)
         self.table_tiles+=hand_tiles136
 
@@ -355,15 +372,19 @@ class TenhouServerSocket:
 
         self.player = Player("", "", "", False)
         self.game_info = GameInfo.initial()
-        self.game = MahjongGame(self.game_info,random_seed=761761)
+        self.game = MahjongGame(self.game_info,random_seed=54981297492777)
         self.meld_lock=threading.Lock()
         # 3498274 nothing special
         # 209014207127490 ok
         # 991030420223 ok
         # -5920003992219882329 ok
         # 761761 ron is called
-
-
+        # 1234567 - no ready hand collected
+        # -9999999 - ron is called
+        # 1 - ron is called
+        # 16778 - ron is called
+        # 54981297492777
+        self.game_over=threading.Condition()
         self.opponents = [
             Player(seat=1, name="Player1",
                    tid="1", sx="M", authenticated=True),
@@ -404,25 +425,39 @@ class TenhouServerSocket:
         connection.close()
         print(connection)
 
-    @staticmethod
-    def parse_messages(messages_str: str):
+    def parse_messages(self, messages_str: str):
         t = TenhouServerSocket
         msgs = messages_str.split(t.message_sep)
-        msgs = [x for x in msgs if x]
-
-        return [Message(x) for x in msgs]
+        msgs = [Message(x) for x in msgs if x]
+        for x in msgs:
+            x.round_number=self.game.game_info.round_number
+        return msgs
 
     def stop(self):
         self.exit = True
         self.skt.close()
 
     def handle_next_turn(self,conn:socket.socket):
-        while self.game.game_info.active_seat != self.player.seat:
+        while self.game.game_info.active_seat != self.player.seat \
+                and not self.is_game_over() and not self.is_round_over():
+            if self.meld_lock.locked():
+                self.meld_lock.acquire()
             self.next_turn(conn)
+            if self.is_round_over() or self.is_game_over():
+                break
+
+
+        if self.is_round_over() or self.is_game_over():
+            return
+        if self.meld_lock.locked():
+            self.meld_lock.acquire()
+        if self.is_round_over() or self.is_game_over():
+            return
         self.next_turn(conn)
 
     def process_message(self, conn: socket.socket, message: Message) -> Message | list[Message]:
-
+        if message.round_number!=self.game.game_info.round_number:
+            return []
         t = message.type.lower()
         # print(message)
         messages = []
@@ -506,8 +541,11 @@ class TenhouServerSocket:
         elif t == 'd':
             tile = int(message['p'])
             print("player discarded a tile: %s"%Tile.tile136_to_string([tile]))
-            self.player.discard(tile)
-
+            try:
+                self.player.discard(tile)
+            except:
+                exc=traceback.format_exc()
+                print(exc)
             t=threading.Thread(target=lambda:self.handle_next_turn(conn))
             t.start()
 
@@ -519,6 +557,8 @@ class TenhouServerSocket:
         return messages
 
     def handle_meld(self,conn:socket.socket,message:Message):
+        if message.round_number!=self.game.game_info.round_number:
+            return []
         if self.is_round_over() or self.is_game_over():
             return
         messages=[]
@@ -539,15 +579,17 @@ class TenhouServerSocket:
             print("bot called a meld")
         if meld_type == 0:  # meld cancelled
             print("meld cancelled")
+
         elif meld_type == 1:
             print("player called a pon")
 
             tile1 = int(message['hai0'])
             # tile2=tile1 if not "hai1" in message else int(message["hai0"])
             pon_msg = self.call_pon_by_player(self.player.seat, self.last_discarded_tile_seat, tile1)
+            self.game.game_info.active_seat=self.player.seat
             messages.append(pon_msg)
 
-        elif meld_type == 5 or meld_type == 2 or meld_type == 4:
+        elif meld_type == 2 or meld_type == 4:
             print("player called a kan")
             tile_called = int(message.args.get('hai0', -1))
             print("tile called (kan):", tile_called)
@@ -557,6 +599,7 @@ class TenhouServerSocket:
             else:
                 # open kan
                 from_seat = self.last_discarded_tile_seat
+            self.game.game_info.active_seat = self.player.seat
             messages.append(self.call_kan_by_player(self.player.seat, from_seat, tile136=tile_called))
             # draw next tile after calling a kan
             messages.append(self.draw_tile_by_player(self.player.seat, self.game.get_next_tile()))
@@ -569,12 +612,17 @@ class TenhouServerSocket:
                                                  self.get_player_by_seat(from_seat).get_last_discarded_tile(),
                                                  tile0, tile1, 0))
         elif meld_type == 6:
+            time.sleep(3)
+            self.end_round(winner=self.player.seat)
             print("Player called a win!")
-            self.game.end_round(winner=self.player.seat)
             assert self.is_round_over() or self.is_game_over()
 
+        if self.meld_lock.locked():
+            self.meld_lock.release()
         self.send_messages(conn,messages)
-        self.meld_lock.release()
+
+    def end_round(self,winner=None):
+        self.game.end_round(winner=winner)
 
     def next_turn(self, conn: socket.socket) -> None:
         if self.is_round_over() or self.is_game_over():
@@ -591,13 +639,22 @@ class TenhouServerSocket:
             self.send_messages(conn, message)
             self._wait_for_a_while()
 
+        if self.is_round_over() or self.is_game_over():
+            return
+
         if active_seat == self.player.seat:
-            if not self.is_game_over() and not self.is_round_over():
-                send(self.draw_tile_by_player(self.player.seat, self.game.get_next_tile()))
+            if self.meld_lock.locked():
+                self.meld_lock.acquire()
+            if self.is_game_over() or self.is_round_over():
+                return
+            send(self.draw_tile_by_player(self.player.seat, self.game.get_next_tile()))
         else:
-            if not self.is_game_over() and not self.is_round_over():
-                send(self.draw_tile_by_player(active_seat, self.game.get_next_tile()))
-                send(self.discard_tile_by_player(active_seat, None))
+            if self.meld_lock.locked():
+                self.meld_lock.acquire()
+            if self.is_game_over() or self.is_round_over():
+                return
+            send(self.draw_tile_by_player(active_seat, self.game.get_next_tile()))
+            send(self.discard_tile_by_player(active_seat, None))
 
     def call_meld_by_player(self) -> Message:
         return Message.for_type_and_args("N", args={
@@ -656,6 +713,8 @@ class TenhouServerSocket:
                 p.hand = self.game.get_next_hand()
         self.player = players[0]
         self.opponents = players[1:]
+        if self.meld_lock.locked():
+            self.meld_lock.release()
 
 
     def round_over_message(self) -> Message:
@@ -675,33 +734,36 @@ class TenhouServerSocket:
             return self.player
         return [x for x in self.opponents if x.seat == seat_num][0]
 
-    def discarded_tile_message(self, seat: int, tile136: int) -> Message:
+    def discarded_tile_message(self, seat: int, tile136: int) -> Message|list[Message]:
         seat_str = self.discarded_tile_message_type_by_seat(seat)
         args = dict()
 
         tiles34 = self.player.hand.get_tiles(fmt=34)
-        print("Seat %s discarded: %s" % (seat_str, Tile.tile136_to_string([tile136])))
+        print("Seat %s discarded: %s" % (seat_str, Tile.t136_to_g([tile136])))
         if WinCalc.is_fulfilled(tiles34, MahjongGame.tile_from_136_to_34(tile136)):
-            print("can call ron")
+            print("can call ron for tile: %s"%Tile.t136_to_g([tile136]))
             args['t'] = "12"
             self.meld_lock.acquire()
-        elif self.player.can_call_chii(seat, MahjongGame.tile_from_136_to_34(tile136)):
-            print("can call chii")
+        elif self.player.can_call_chii(seat, tile136):
+            print("can call chii for tile: %s"%Tile.t136_to_g([tile136]))
             args['t'] = "3"
             self.meld_lock.acquire()
-        elif self.player.can_call_kan(MahjongGame.tile_from_136_to_34(tile136)):
+        elif self.player.can_call_kan(tile136):
             t = "4" if self.player.seat == seat else "2"
             if t == "2":
-                print("can call an open kan")
+                print("can call an open kan tile: %s"%Tile.t136_to_g([tile136]))
             else:
-                print("can call a closed can")
+                print("can call a closed can tile: %s"%Tile.t136_to_g([tile136]))
             args['t'] = t
             self.meld_lock.acquire()
-        elif self.player.can_call_pon(MahjongGame.tile_from_136_to_34(tile136)):
-            print("can call pon")
+        elif self.player.can_call_pon(tile136):
+            print("can call pon tile: %s"%Tile.t136_to_g([tile136]))
             args['t'] = "1"
             self.meld_lock.acquire()
 
+        if self.is_game_over() or self.is_round_over():
+            print("player called ron or tsumo")
+            return []
         return Message.for_type_and_args("%s%d" % (seat_str, tile136), args)
 
     def _wait_for_a_while(self):
@@ -833,6 +895,8 @@ class TenhouServerSocket:
     def send_messages(self, conn: socket.socket, messages: Message | list[Message]):
         if isinstance(messages, Message):
             messages = [messages]
+        messages=[x for x in messages if
+            x.round_number is None or x.round_number==self.game.game_info.round_number]
         conn.sendall(self.message_sep.join(
             map(lambda x: (x.stringify() + self.message_sep), messages)
         ).encode())
