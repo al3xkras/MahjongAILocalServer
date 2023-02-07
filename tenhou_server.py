@@ -18,7 +18,7 @@ class MahjongGame:
             random.seed(self.seed)
         else:
             random.seed()
-        #random.shuffle(self.tiles)
+        random.shuffle(self.tiles)
         self.seats.rotate(random.randint(0,3))
         self.last_drawn_tile=None
         print(self)
@@ -313,7 +313,7 @@ class TenhouServerSocket:
 
         self.player=Player("","","",False)
         self.game_info=GameInfo.initial()
-        self.game=MahjongGame(self.game_info,random_seed=919492783)
+        self.game=MahjongGame(self.game_info)
 
         self.opponents=[
             Player(seat=1, name="Player1",
@@ -325,6 +325,7 @@ class TenhouServerSocket:
         ]
 
         self.last_discarded_tile=None
+        self.last_discarded_tile_seat=None
 
     def start(self):
         self.skt.bind((self.url,self.port))
@@ -446,7 +447,13 @@ class TenhouServerSocket:
                 i=(i+1)%4
             if not self.is_game_over() and not self.is_round_over():
                 messages.append(self.draw_tile_by_player_message(self.player.seat, self.game.get_next_tile()))
-            messages.append(self.call_chii_by_player(0,1,2))
+            #self.send_messages(conn,self.call_chii_by_player(self.opponents[2].seat,self.opponents[1].seat, 1*4,2*4,3*4))
+            #self._wait_for_a_while()
+            #self.send_messages(conn,self.call_pon_by_player(self.opponents[0].seat,self.opponents[2].seat,0))
+            #self._wait_for_a_while()
+            #self.send_messages(conn,self.call_kan_by_player(self.opponents[1].seat, self.opponents[2].seat, 5))
+            #messages.append(
+            #    self.call_kan_by_player(self.player.seat, self.opponents[2].seat, 1))
 
         elif t=='reach':
             print("player called riichi")
@@ -475,18 +482,38 @@ class TenhouServerSocket:
 
             elif meld_type==1:
                 print("player called a pon")
-                tile_called = int(message['hai0'])
 
-                self.call_pon_by_player(self.player.seat,tile_called)
+                tile1 = int(message['hai0'])
+                #tile2=tile1 if not "hai1" in message else int(message["hai0"])
+                pon_msg=self.call_pon_by_player(self.player,tile1,
+                                                self.last_discarded_tile_seat)
+                messages.append(pon_msg)
+
             elif meld_type==5 or meld_type==2 or meld_type==4:
                 print("player called a kan")
                 tile_called = int(message.args.get('hai', -1))
                 print("tile called (kan):",tile_called)
+                msgs=[]
+                if tile_called==self.game.get_last_drawn_tile():
+                    #closed kan
+                    from_seat=self.player.seat
+                else:
+                    #open kan
+                    from_seat=self.last_discarded_tile_seat
+                msgs.append(self.call_kan_by_player(self.player.seat,from_seat,tile=tile_called))
                 #draw next tile after calling a kan
-                self.send_messages(conn,self.draw_tile_by_player_message(self.player.seat,self.game.get_next_tile()))
+                msgs.append(self.draw_tile_by_player_message(self.player.seat,self.game.get_next_tile()))
+                self.send_messages(conn,msgs)
+
             elif meld_type==3:
                 tile0=int(message['hai0'])
                 tile1=int(message['hai1'])
+                msgs=[]
+                from_seat=(self.player.seat+3)%4
+                msgs.append(self.call_chii_by_player(self.player.seat,from_seat,
+                     self.get_player_by_seat(from_seat).get_last_discarded_tile(),tile0,tile1,0))
+                self.send_messages(conn,msgs)
+
             elif meld_type==6:
                 print("Player called a win!")
                 self.game.end_round()
@@ -584,9 +611,8 @@ class TenhouServerSocket:
         args=dict()
 
         tiles34=self.player.hand.get_tiles(fmt=34)
-        tile=MahjongGame.tile_from_136_to_34(tile)
         print("Seat %s discarded: %s"%(seat_str,Tile.tile136_to_string([tile])))
-        if WinCalc.is_fulfilled(tiles34,tile):
+        if WinCalc.is_fulfilled(tiles34,tile//4):
             args['t']="9"
         elif self.player.can_call_kan(tile):
             args['t']="3"
@@ -623,39 +649,43 @@ class TenhouServerSocket:
         player=self.get_player_by_seat(seat)
         tile_drawn=self.game.get_next_tile()
         if tile_number is None:
-            tile=player.discard_random(tile_drawn)
+            tile = player.discard_random(tile_drawn)
         else:
             tile = player.discard(tile_number,tile_drawn)
         self.last_discarded_tile=tile
+        self.last_discarded_tile_seat=seat
         return self.discarded_tile_message(seat, tile)
 
     def seat_to_player_number(self, seat:int):
         return (seat-self.player.seat)%4
 
-    def call_pon_by_player(self, seat:int, tile:int) -> Message:
-        #pon encoding: base           | x      | xxxxxxxx
-        #              base/which     | is pon | 
+    def call_pon_by_player(self, seat:int, from_seat:int, tile:int, chankan=False) -> Message:
+        pon_tiles=[MahjongGame.tile_from_136_to_34(tile)]*3
+        t=1 if chankan else 0
+        called_index=0
         return Message.for_type_and_args("n", {
             "who": str(self.seat_to_player_number(seat)),
-            "m": str(int("100000|0|11|01|00|1|11".replace("|", ""), 2)),
+            "from_who": str(self.seat_to_player_number(from_seat)),
+            "type":"pon",
+            "m": "%d %d %s %s %s"%(t,called_index,pon_tiles[0],pon_tiles[1],pon_tiles[2]),
         })
 
-    def call_chii_by_player(self, seat:int, tile1: int, tile2: int) -> Message:
-        # chow encoding     xxxxxx    |    0    |    xx    |    xx     |   xx   |   x        |   xx
-        #                base/which                 tile3     tile2      tile1     is chow       who called
-        # e.g. 100000       0       11      01        00      1      11
-        # 11: player 3 called this meld
-        # 1: is a chow set
-        # 00: first of four tiles
-        # 01: second of four tiles
-        # 11: fourth of four tiles
-        # 0: no meaning
-        # 100000: =32  32//3 = 10 --> the tenth chow set is 456p
-        #              32 % 3 = 2 --> the third tile was the called tile
-        # totally: player 3 called the meld 456p with 6p
+    def call_chii_by_player(self, seat:int, from_seat:int, tile1: int, tile2: int, tile3:int, tile_called_num=0) -> Message:
         return Message.for_type_and_args("n", {
-            "who": str(seat),
-            "m": str(int("100000|0|11|01|00|1|11".replace("|",""),2)),
+            "who": str(self.seat_to_player_number(seat)),
+            "from_who": str(self.seat_to_player_number(from_seat)),
+            "type":"chi",
+            "m": "%d %s %s %s"%(tile_called_num,tile1,tile2,tile3),
+        })
+
+    def call_kan_by_player(self, seat: int, from_seat:int, tile: int) -> Message:
+        tiles = [MahjongGame.tile_from_136_to_34(tile)] * 4
+        called_index = 0
+        return Message.for_type_and_args("n", {
+            "who": str(self.seat_to_player_number(seat)),
+            "from_who": str(self.seat_to_player_number(from_seat)),
+            "type": "kan",
+            "m": " %d %s %s %s %s" % (called_index, tiles[0], tiles[1], tiles[2],tiles[3]),
         })
 
     def initialize_game(self,game_info:GameInfo)->Message:

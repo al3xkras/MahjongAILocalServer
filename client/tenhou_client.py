@@ -666,7 +666,11 @@ class TenhouClient:
             if meld:
                 meld_type = '3' if meld.type == Meld.CHI else '1'
                 self_tiles = [t for t in meld.tiles if t != meld.called_tile]
-                self._send('<N type="{}" hai0="{}" hai1="{}" />'.format(meld_type, self_tiles[0], self_tiles[1]))
+                print(self_tiles)
+                if len(self_tiles)==1:
+                    self._send('<N type="{}" hai0="{}" />'.format(meld_type, self_tiles[0]))
+                else:
+                    self._send('<N type="{}" hai0="{}" hai1="{}" />'.format(meld_type, self_tiles[0], self_tiles[1]))
                 self.game_table.count_remaining_tiles += 1
                 return tile
             else:

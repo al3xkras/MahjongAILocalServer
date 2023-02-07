@@ -107,72 +107,112 @@ class TenhouParser:
         return players
 
     @staticmethod
-    def parse_meld(msg):
-        data = int(TenhouParser.get_attribute_value(msg, 'm'))
+    def parse_meld(msg,alternative=True):
+        data = TenhouParser.get_attribute_value(msg, 'm')
         meld = Meld()
         meld.by_whom = int(TenhouParser.get_attribute_value(msg, 'who'))
-        meld.from_whom = data & 0x3  # '11'
-
-        if data & 0x4:  # '100'
-            meld = TenhouParser.parse_chi(data, meld)
-        elif data & 0x18:  # '11000'
-            TenhouParser.parse_pon(data, meld)
-        elif data & 0x20:  # '100000'
-            TenhouParser.parse_nuki(data, meld)
+        if alternative:
+            meld.from_whom = int(TenhouParser.get_attribute_value(msg, 'from_who'))
+            meld_type=TenhouParser.get_attribute_value(msg, 'type').lower()
+            if meld_type=="chi":
+                TenhouParser.parse_chi(data, meld,alternative=True)
+            elif meld_type=="pon":
+                TenhouParser.parse_pon(data, meld,alternative=True)
+            elif meld_type=="kan":
+                TenhouParser.parse_kan(data, meld)
+            return meld
         else:
-            TenhouParser.parse_kan(data, meld)
-        return meld
+            data=int(data)
+            meld.from_whom = data & 0x3  # '11'
+
+            if data & 0x4:  # '100'
+                meld = TenhouParser.parse_chi(data, meld)
+            elif data & 0x18:  # '11000'
+                TenhouParser.parse_pon(data, meld)
+            elif data & 0x20:  # '100000'
+                TenhouParser.parse_nuki(data, meld)
+            else:
+                TenhouParser.parse_kan(data, meld)
+            return meld
 
     @staticmethod
     def parse_chi(data, meld,alternative=True):
-        # chow encoding     xxxxxx    |    0    |    xx    |    xx     |   xx   |   x        |   xx
-        #                base/which                 tile3     tile2      tile1     is chow       who called
-        # e.g. 100000       0       11      01        00      1      11
-        # 11: player 3 called this meld
-        # 1: is a chow set
-        # 00: first of four tiles
-        # 01: second of four tiles
-        # 11: fourth of four tiles
-        # 0: no meaning
-        # 100000: =32  32//3 = 10 --> the tenth chow set is 456p
-        #              32 % 3 = 2 --> the third tile was the called tile
-        # totally: player 3 called the meld 456p with 6p
-        meld.type = Meld.CHI
-        t0, t1, t2 = (data >> 3) & 0x3, (data >> 5) & 0x3, (data >> 7) & 0x3
-        base_and_called = data >> 10
-        base = base_and_called // 3
-        called = base_and_called % 3
-        base = (base // 7) * 9 + base % 7
-        meld.tiles = [t0 + 4 * (base + 0), t1 + 4 * (base + 1), t2 + 4 * (base + 2)]
-        meld.called_tile = meld.tiles[called]
-        return meld
-
-    @staticmethod
-    def parse_pon(data, meld):
-        t4 = (data >> 5) & 0x3
-        t0, t1, t2 = ((1, 2, 3), (0, 2, 3), (0, 1, 3), (0, 1, 2))[t4]
-        base_and_called = data >> 9
-        base = base_and_called // 3
-        called = base_and_called % 3
-        if data & 0x8:
-            meld.type = Meld.PON
-            meld.tiles = [t0 + 4 * base, t1 + 4 * base, t2 + 4 * base]
-            meld.called_tile = meld.tiles[called]
+        if alternative:
+            meld.type = Meld.CHI
+            tiles=list(map(int,data.split()))
+            called_index,tiles=tiles[0],tiles[1:]
+            meld.tiles=tiles
+            meld.called_tile=meld.tiles[called_index]
+            return meld
         else:
-            meld.type = Meld.CHANKAN
-            meld.tiles = [t0 + 4 * base, t1 + 4 * base, t2 + 4 * base, t4 + 4 * base]
-            meld.called_tile = meld.tiles[3]
+            # chow encoding     xxxxxx    |    0    |    xx    |    xx     |   xx   |   x        |   xx
+            #                base/which                 tile3     tile2      tile1     is chow       who called
+            # e.g. 100000       0       11      01        00      1      11
+            # 11: player 3 called this meld
+            # 1: is a chow set
+            # 00: first of four tiles
+            # 01: second of four tiles
+            # 11: fourth of four tiles
+            # 0: no meaning
+            # 100000: =32  32//3 = 10 --> the tenth chow set is 456p
+            #              32 % 3 = 2 --> the third tile was the called tile
+            # totally: player 3 called the meld 456p with 6p
+            meld.type = Meld.CHI
+            t0, t1, t2 = (data >> 3) & 0x3, (data >> 5) & 0x3, (data >> 7) & 0x3
+            base_and_called = data >> 10
+            base = base_and_called // 3
+            called = base_and_called % 3
+            base = (base // 7) * 9 + base % 7
+            meld.tiles = [t0 + 4 * (base + 0), t1 + 4 * (base + 1), t2 + 4 * (base + 2)]
+            meld.called_tile = meld.tiles[called]
+            return meld
 
     @staticmethod
-    def parse_kan(data, meld):
-        base_and_called = data >> 8
-        base = base_and_called // 4
-        meld.type = Meld.KAN
-        meld.tiles = [4 * base, 1 + 4 * base, 2 + 4 * base, 3 + 4 * base]
-        called = base_and_called % 4
-        meld.called_tile = meld.tiles[called]
-        # to mark closed\opened kans
-        meld.open = meld.by_whom != meld.from_whom
+    def parse_pon(data, meld,alternative=True):
+        if alternative:
+            tiles=list(map(int,data.split()))
+            meld_type,called_index,tiles=tiles[0],tiles[1],tiles[2:]
+            meld.tiles=tiles
+            meld.called_tile=meld.tiles[called_index]
+            meld.type=Meld.PON if meld_type==0 else Meld.CHANKAN
+            return meld
+        else:
+            t4 = (data >> 5) & 0x3
+            t0, t1, t2 = ((1, 2, 3), (0, 2, 3), (0, 1, 3), (0, 1, 2))[t4]
+            base_and_called = data >> 9
+            base = base_and_called // 3
+            called = base_and_called % 3
+            if data & 0x8:
+                meld.type = Meld.PON
+                meld.tiles = [t0 + 4 * base, t1 + 4 * base, t2 + 4 * base]
+                meld.called_tile = meld.tiles[called]
+            else:
+                meld.type = Meld.CHANKAN
+                meld.tiles = [t0 + 4 * base, t1 + 4 * base, t2 + 4 * base, t4 + 4 * base]
+                meld.called_tile = meld.tiles[3]
+
+
+
+
+    @staticmethod
+    def parse_kan(data, meld,alternative=True):
+        if alternative:
+            meld.type = Meld.KAN
+            tiles=list(map(int,data.split()))
+            called_index,tiles=tiles[0],tiles[1:]
+            meld.tiles=tiles
+            meld.called_tile=meld.tiles[called_index]
+            meld.open = meld.by_whom != meld.from_whom
+            return meld
+        else:
+            base_and_called = data >> 8
+            base = base_and_called // 4
+            meld.type = Meld.KAN
+            meld.tiles = [4 * base, 1 + 4 * base, 2 + 4 * base, 3 + 4 * base]
+            called = base_and_called % 4
+            meld.called_tile = meld.tiles[called]
+            # to mark closed\opened kans
+            meld.open = meld.by_whom != meld.from_whom
 
     @staticmethod
     def parse_nuki(data, meld):
