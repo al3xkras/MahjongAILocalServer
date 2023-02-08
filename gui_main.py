@@ -1041,7 +1041,7 @@ def main():
     img = ImageTk.PhotoImage(bg_image)
     canvas.create_image(0, 0, image=img, anchor="nw")
     drawer = TableDisplay(canvas)
-    run_jianyang_ai(drawer)
+    run_example_ai(drawer)
     root.mainloop()
 
 

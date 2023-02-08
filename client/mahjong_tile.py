@@ -290,3 +290,9 @@ MAN_KANS_SYM = ['🀇🀇🀇🀇', '🀈🀈🀈🀈', '🀉🀉🀉🀉', '�
 
     DORA_SYM = ['🀆', '🀅', '🀄', 'player-wind', 'round-wind']
 """
+if __name__ == '__main__':
+    for i in range(136):
+        print(Tile.t136_to_g([i]),end=" ")
+    print()
+    for i in range(34):
+        print(Tile.t34_to_g([i]),end="")
